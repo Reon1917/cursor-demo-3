@@ -1,0 +1,297 @@
+-- Drop existing tables if they exist
+DROP TABLE IF EXISTS professional_athlete_relations CASCADE;
+DROP TABLE IF EXISTS comments CASCADE;
+DROP TABLE IF EXISTS posts CASCADE;
+DROP TABLE IF EXISTS professionals CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
+-- First, reset and set up schema permissions properly
+ALTER SCHEMA public OWNER TO postgres;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO postgres;
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO service_role;
+
+-- Enable UUID extension if not already enabled
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create tables with proper ownership
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    auth_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    date_of_birth DATE,
+    weight DECIMAL(5,2),
+    height DECIMAL(5,2),
+    description TEXT,
+    role TEXT NOT NULL CHECK (role IN ('athlete', 'trainer', 'nutritionist')),
+    CONSTRAINT username_length CHECK (char_length(username) >= 3)
+);
+ALTER TABLE users OWNER TO service_role;
+
+-- Create professionals table
+CREATE TABLE professionals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    professional_type TEXT NOT NULL CHECK (professional_type IN ('trainer', 'nutritionist')),
+    verified BOOLEAN DEFAULT false,
+    likes_count INTEGER DEFAULT 0,
+    max_athletes INTEGER DEFAULT 10,
+    current_athletes INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    CONSTRAINT max_athletes_limit CHECK (max_athletes <= 20),
+    CONSTRAINT current_athletes_limit CHECK (current_athletes <= max_athletes)
+);
+
+-- Create posts table
+CREATE TABLE posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    image_url TEXT,
+    author_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    likes_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0,
+    is_private BOOLEAN DEFAULT false
+);
+
+-- Create comments table
+CREATE TABLE comments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    content TEXT NOT NULL,
+    post_id UUID REFERENCES posts(id) ON DELETE CASCADE NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL
+);
+
+-- Create professional_athlete_relations table
+CREATE TABLE professional_athlete_relations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    professional_id UUID REFERENCES professionals(id) ON DELETE CASCADE NOT NULL,
+    athlete_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+    UNIQUE(professional_id, athlete_id)
+);
+
+-- Enable RLS
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE professionals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE professional_athlete_relations ENABLE ROW LEVEL SECURITY;
+
+-- Users table policies
+DROP POLICY IF EXISTS "users_select_policy" ON users;
+DROP POLICY IF EXISTS "users_insert_policy" ON users;
+DROP POLICY IF EXISTS "users_update_policy" ON users;
+DROP POLICY IF EXISTS "users_delete_policy" ON users;
+DROP POLICY IF EXISTS "service_role_manage_users" ON users;
+
+-- Allow anyone to create a user profile during signup
+CREATE POLICY "Enable insert for registration" ON users
+    FOR INSERT
+    TO authenticated, anon
+    WITH CHECK (true);
+
+-- Allow users to view any profile
+CREATE POLICY "Enable read access for all users" ON users
+    FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+-- Allow users to update their own profile
+CREATE POLICY "Enable update for users based on auth_id" ON users
+    FOR UPDATE
+    TO authenticated
+    USING (auth.uid() = auth_id)
+    WITH CHECK (auth.uid() = auth_id);
+
+-- Allow users to delete their own profile
+CREATE POLICY "Enable delete for users based on auth_id" ON users
+    FOR DELETE
+    TO authenticated
+    USING (auth.uid() = auth_id);
+
+-- Allow service role full access
+CREATE POLICY "Enable full access for service role" ON users
+    FOR ALL
+    TO service_role
+    USING (true)
+    WITH CHECK (true);
+
+-- Professionals table policies
+CREATE POLICY "professionals_select_policy" 
+    ON professionals 
+    FOR SELECT 
+    TO authenticated, anon 
+    USING (true);
+
+CREATE POLICY "professionals_insert_policy" 
+    ON professionals 
+    FOR INSERT 
+    TO authenticated 
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "professionals_update_policy" 
+    ON professionals 
+    FOR UPDATE 
+    TO authenticated 
+    USING (auth.uid() = user_id) 
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "professionals_delete_policy" 
+    ON professionals 
+    FOR DELETE 
+    TO authenticated 
+    USING (auth.uid() = user_id);
+
+-- Posts table policies
+CREATE POLICY "posts_select_policy" 
+    ON posts 
+    FOR SELECT 
+    TO authenticated, anon 
+    USING (NOT is_private OR auth.uid() = author_id);
+
+CREATE POLICY "posts_insert_policy" 
+    ON posts 
+    FOR INSERT 
+    TO authenticated 
+    WITH CHECK (auth.uid() = author_id);
+
+CREATE POLICY "posts_update_policy" 
+    ON posts 
+    FOR UPDATE 
+    TO authenticated 
+    USING (auth.uid() = author_id) 
+    WITH CHECK (auth.uid() = author_id);
+
+CREATE POLICY "posts_delete_policy" 
+    ON posts 
+    FOR DELETE 
+    TO authenticated 
+    USING (auth.uid() = author_id);
+
+-- Comments table policies
+CREATE POLICY "comments_select_policy" 
+    ON comments 
+    FOR SELECT 
+    TO authenticated, anon 
+    USING (true);
+
+CREATE POLICY "comments_insert_policy" 
+    ON comments 
+    FOR INSERT 
+    TO authenticated 
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "comments_update_policy" 
+    ON comments 
+    FOR UPDATE 
+    TO authenticated 
+    USING (auth.uid() = user_id) 
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "comments_delete_policy" 
+    ON comments 
+    FOR DELETE 
+    TO authenticated 
+    USING (auth.uid() = user_id);
+
+-- Professional-athlete relations table policies
+CREATE POLICY "relations_select_policy" 
+    ON professional_athlete_relations 
+    FOR SELECT 
+    TO authenticated 
+    USING (
+        auth.uid() = athlete_id OR 
+        auth.uid() IN (
+            SELECT user_id FROM professionals WHERE id = professional_id
+        )
+    );
+
+CREATE POLICY "relations_insert_policy" 
+    ON professional_athlete_relations 
+    FOR INSERT 
+    TO authenticated 
+    WITH CHECK (auth.uid() = athlete_id);
+
+CREATE POLICY "relations_update_policy" 
+    ON professional_athlete_relations 
+    FOR UPDATE 
+    TO authenticated 
+    USING (
+        auth.uid() = athlete_id OR 
+        auth.uid() IN (
+            SELECT user_id FROM professionals WHERE id = professional_id
+        )
+    ) 
+    WITH CHECK (
+        auth.uid() = athlete_id OR 
+        auth.uid() IN (
+            SELECT user_id FROM professionals WHERE id = professional_id
+        )
+    );
+
+CREATE POLICY "relations_delete_policy" 
+    ON professional_athlete_relations 
+    FOR DELETE 
+    TO authenticated 
+    USING (
+        auth.uid() = athlete_id OR 
+        auth.uid() IN (
+            SELECT user_id FROM professionals WHERE id = professional_id
+        )
+    );
+
+-- Create indexes for better performance
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_professionals_user_id ON professionals(user_id);
+CREATE INDEX idx_posts_author_id ON posts(author_id);
+CREATE INDEX idx_comments_post_id ON comments(post_id);
+CREATE INDEX idx_comments_user_id ON comments(user_id);
+CREATE INDEX idx_relations_professional_id ON professional_athlete_relations(professional_id);
+CREATE INDEX idx_relations_athlete_id ON professional_athlete_relations(athlete_id);
+
+-- After all tables are created, grant permissions
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO service_role;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+-- Ensure RLS is enforced
+ALTER TABLE users FORCE ROW LEVEL SECURITY;
+ALTER TABLE professionals FORCE ROW LEVEL SECURITY;
+ALTER TABLE posts FORCE ROW LEVEL SECURITY;
+ALTER TABLE comments FORCE ROW LEVEL SECURITY;
+ALTER TABLE professional_athlete_relations FORCE ROW LEVEL SECURITY;
+
+-- Grant necessary permissions
+ALTER TABLE users OWNER TO service_role;
+GRANT ALL ON users TO service_role;
+GRANT ALL ON users TO authenticated;
+GRANT ALL ON users TO postgres;
+GRANT ALL ON users TO anon;
+GRANT ALL ON users TO service_role;
+
+-- Grant table-specific permissions
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+-- At the very end, ensure proper ownership
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO service_role; 
