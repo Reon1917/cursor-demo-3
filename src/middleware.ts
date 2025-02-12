@@ -1,32 +1,38 @@
-import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { authMiddleware, redirectToSignIn } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
+export default authMiddleware({
+  // Public routes that don't require authentication
+  publicRoutes: [
+    "/",
+    "/api/webhooks/clerk",
+    "/about",
+    "/features",
+    "/professionals",
+    "/signin",
+    "/signup"
+  ],
+  
+  // Routes that can be accessed while signed out
+  ignoredRoutes: [
+    "/api/webhooks/clerk"
+  ],
+  afterAuth(auth, req) {
+    // Handle users who aren't authenticated
+    if (!auth.userId && !auth.isPublicRoute) {
+      return redirectToSignIn({ returnBackUrl: req.url });
+    }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    // If the user is logged in and trying to access a protected route, allow them
+    if (auth.userId && !auth.isPublicRoute) {
+      return NextResponse.next();
+    }
 
-  // Auth condition
-  const isAuthRoute = req.nextUrl.pathname.startsWith('/(auth)');
-  const isProtectedRoute = req.nextUrl.pathname.startsWith('/dashboard');
-
-  // Redirect if logged in and trying to access auth routes
-  if (session && isAuthRoute) {
-    return NextResponse.redirect(new URL('/dashboard', req.url));
-  }
-
-  // Redirect if not logged in and trying to access protected routes
-  if (!session && isProtectedRoute) {
-    return NextResponse.redirect(new URL('/signin', req.url));
-  }
-
-  return res;
-}
+    // Allow users visiting public routes to access them
+    return NextResponse.next();
+  },
+});
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  matcher: ["/((?!.+\\.[\\w]+$|_next).*)", "/", "/(api|trpc)(.*)"],
 }; 

@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { ClerkProvider } from '@clerk/nextjs';
 import "./globals.css";
-import { AuthProvider } from "@/lib/auth-context";
-import Navbar from "@/components/ui/Navbar";
+import Navbar from "@/components/Navbar";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "FitHub - Your Fitness Journey Starts Here",
-  description: "Connect with fitness professionals and track your journey to a healthier life",
+  title: "FitHub - Connect with Fitness Professionals",
+  description: "Connect with certified fitness trainers and nutritionists to achieve your fitness goals.",
 };
 
 export default function RootLayout({
@@ -17,15 +17,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
-        <AuthProvider>
+    <ClerkProvider>
+      <html lang="en">
+        <body className={inter.className}>
           <Navbar />
           <main className="pt-16">
             {children}
           </main>
-        </AuthProvider>
-      </body>
-    </html>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }
